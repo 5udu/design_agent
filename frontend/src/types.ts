@@ -1,0 +1,9 @@
+export type Project = {session_id:string;current_image_id?:string;id:string;name:string;brand:string;product:string;approved_copy:string[]};
+export type Asset = {id:string;url:string;title:string;kind:string;version_id:string;run_id?:string;reference_asset_id?:string;created_at:number;width:number;height:number};
+export type Run = {id:string;session_id:string;project_id:string;message:string;status:string;steps?:number;reasoning_effort?:ReasoningEffort;summary?:string;error?:string;output_asset_ids?:string[];target_asset_id?:string;created_at?:number;updated_at?:number;question?:{question:string;options:string[]}};
+export type AgentEvent = {id:number;session_id:string;seq:number;run_id:string;step_id?:string;call_id?:string;source:string;kind:string;data:Record<string,any>;created_at:number};
+export type Conversation = {run:Run;events:AgentEvent[]};
+export type Session = {id:string;project_id:string};
+export type ProjectDetail = {project:Project;session:Session;cursor:number;assets:Asset[];runs:Run[];conversations:Conversation[]};
+export const REASONING_EFFORTS = ['off','low','high','max'] as const;
+export type ReasoningEffort = (typeof REASONING_EFFORTS)[number];
