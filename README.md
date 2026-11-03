@@ -31,15 +31,6 @@ Design Agent 是一个面向产品效果图创作的图像 Agent。你描述目�
 | --- | --- |
 | ![红白国潮饭盒](docs/evidence/image-agent/red-lunchbox.png) | ![深蓝国潮饭盒](docs/evidence/image-agent/blue-lunchbox.png) |
 
-<details>
-<summary>查看对话工作区截图</summary>
-
-![对话工作区示例](docs/evidence/image-agent/workspace.png)
-
-截图来自上述演示，部分界面细节早于当前版本。原始示例的调用统计见 [演示记录](docs/evidence/image-agent/summary.json)。
-
-</details>
-
 ## 快速开始
 
 当前安装与服务管理脚本面向 **Windows x64 + PowerShell**，已在 **Python 3.12、Node.js 24（含 npm）** 环境验证。还需要安装 Git，并准备 DeepSeek 与 Seedream 的 API 密钥。
@@ -162,7 +153,7 @@ flowchart TD
 
 Agent 在通用的模型与工具循环中选择下一步动作。默认每轮最多 16 次模型决策、3 次图像提交；图片提交状态未知时会保留记录，避免盲目重复提交。
 
-实现细节见 [架构说明](docs/ARCHITECTURE.md) 与 [项目结构](docs/PROJECT_STRUCTURE.md)。
+实现细节见 [架构说明](docs/ARCHITECTURE.md)。
 
 ## 配置
 
@@ -253,7 +244,7 @@ frontend/
   src/              React 对话工作区与事件投影
   tests/            前端事件投影测试
 scripts/            安装、启动、停止与页面验证
-docs/               架构、验收与真实演示记录
+docs/               架构说明与演示图片
 ```
 
 本地生成的 `data/`、`outputs/`、虚拟环境、依赖目录和构建产物均不纳入版本控制。
@@ -268,9 +259,5 @@ docs/               架构、验收与真实演示记录
 ## 文档与参考
 
 - [架构说明](docs/ARCHITECTURE.md)：Agent 循环、会话、上下文、事件与持久执行。
-- [验收范围](docs/ACCEPTANCE.md)：当前测试覆盖与已知限制。
-- [UI 检查记录](docs/UI_REVIEW.md)：已完成的交互改进与后续方向。
-- [清理记录](docs/CLEANUP.md)：代码收敛与回归验证范围。
-- [开源项目调研](docs/OPEN_SOURCE_REFERENCES.md)：设计机制的参考与适用边界。
 
 README 的组织方式参考了 [Open Deep Research](https://github.com/langchain-ai/open_deep_research) 与 [Dexter](https://github.com/virattt/dexter) 的项目介绍、快速开始、配置和测试章节；本页内容以本仓库实现为准。

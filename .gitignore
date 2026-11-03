@@ -28,3 +28,14 @@ htmlcov/
 *.sqlite3-shm
 .DS_Store
 Thumbs.db
+
+# Keep local development notes and evidence private by default.
+# Public documentation and demo images are explicitly listed below.
+/docs/*
+!/docs/ARCHITECTURE.md
+!/docs/evidence/
+/docs/evidence/*
+!/docs/evidence/image-agent/
+/docs/evidence/image-agent/*
+!/docs/evidence/image-agent/red-lunchbox.png
+!/docs/evidence/image-agent/blue-lunchbox.png
