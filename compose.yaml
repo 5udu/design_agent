@@ -1,0 +1,80 @@
+name: design-agent
+x-app: &app
+  image: design-agent:${APP_VERSION:-local}
+  build: .
+  env_file: ${APP_ENV_FILE:-.env}
+  environment:
+    DATA_DIR: /app/data
+    DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL in the deployment env file}
+    APP_ORIGIN: ${APP_ORIGIN:?Set APP_ORIGIN to the workspace URL}
+    COOKIE_SECURE: ${COOKIE_SECURE:-true}
+    DEPLOYMENT_MODE: ${DEPLOYMENT_MODE:-production}
+  volumes:
+    - assets:/app/data
+  read_only: true
+  tmpfs:
+    - /tmp
+  init: true
+  restart: unless-stopped
+  stop_grace_period: 60s
+  logging:
+    driver: json-file
+    options:
+      max-size: 10m
+      max-file: '5'
+  depends_on:
+    db:
+      condition: service_healthy
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: design
+      POSTGRES_USER: design
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set a random database password}
+    volumes:
+      - database:/var/lib/postgresql/data
+    healthcheck:
+      test: [CMD-SHELL, 'pg_isready -U design -d design']
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options: {max-size: 10m, max-file: '5'}
+  api:
+    <<: *app
+    expose: ['8000']
+  worker:
+    <<: *app
+    command: [python, -m, app.runtime.worker]
+    healthcheck:
+      test: [CMD, python, -m, app.ops, worker-health]
+      interval: 15s
+      timeout: 10s
+      start_period: 45s
+      retries: 3
+  gateway:
+    image: caddy:2-alpine
+    environment:
+      SITE_ADDRESS: ${SITE_ADDRESS:?Set SITE_ADDRESS to your domain}
+    ports:
+      - '${BIND_ADDRESS:-0.0.0.0}:${HTTP_PORT:-80}:80'
+      - '${BIND_ADDRESS:-0.0.0.0}:${HTTPS_PORT:-443}:443'
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - gateway_data:/data
+      - gateway_config:/config
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    logging:
+      driver: json-file
+      options: {max-size: 10m, max-file: '5'}
+volumes:
+  database:
+  assets:
+  gateway_data:
+  gateway_config:

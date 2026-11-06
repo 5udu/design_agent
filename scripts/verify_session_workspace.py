@@ -54,8 +54,13 @@ def serve(port):
                         'tool_calls': [{'id': 'local-call', 'type': 'function', 'function': {'name': name, 'arguments': json.dumps(args)}}]}, {}
             return {'content': '已完成本次创作。', 'reasoning_content': 'private-ui-double'}, {}
 
+    from app.auth import Auth
+    auth = Auth(api.store)
+    admin = auth.create_user('ui-admin', 'local-ui-password-123', display_name='测试管理员', is_admin=True)
+    with api.store.connect() as db:
+        db.execute('UPDATE users SET must_change_password=0 WHERE id=?', (admin['id'],))
     images = Images()
-    project = api.store.put('projects', {'id': 'session-ui', 'name': 'Session 浏览器回归', 'brand': 'boss', 'product': '饭盒', 'approved_copy': []})
+    project = api.store.put('projects', {'id': 'session-ui', 'owner_id': admin['id'], 'name': 'Session 浏览器回归', 'brand': 'boss', 'product': '饭盒', 'approved_copy': []})
     for index in range(8):
         run = api.store.enqueue({'id': f'history-{index}', 'project_id': project['id'], 'status': 'queued',
                                 'message': '保留 boss 标志。'+('较早的历史描述，用户已确认。'*150), 'reasoning_effort': 'off'},
@@ -97,7 +102,7 @@ def verify():
         listener.bind(('127.0.0.1', 0))
         port = listener.getsockname()[1]
     with tempfile.TemporaryDirectory(prefix='session-workspace-ui-') as folder:
-        environment = {**os.environ, 'DATA_DIR': folder, 'CONTEXT_WINDOW_TOKENS': '100000',
+        environment = {**os.environ, 'DATA_DIR': folder, 'DATABASE_URL': '', 'DEPLOYMENT_MODE': 'development', 'COOKIE_SECURE': 'false', 'APP_ORIGIN': f'http://127.0.0.1:{port}', 'SSE_POLL_SECONDS': '0.1', 'CONTEXT_WINDOW_TOKENS': '100000',
                        'CONTEXT_OUTPUT_RESERVE': '1000', 'CONTEXT_SAFETY_TOKENS': '500',
                        'CONTEXT_COMPACT_RATIO': '0.08', 'CONTEXT_RETAIN_TOKENS': '300',
                        'CONTEXT_SUMMARY_MAX_TOKENS': '256'}
@@ -110,13 +115,16 @@ def verify():
                 with httpx.Client(base_url=base, timeout=5) as client:
                     for _ in range(100):
                         try:
-                            if client.get('/api/health').status_code == 200:
+                            if client.get('/api/health/ready').status_code == 200:
                                 break
                         except httpx.TransportError:
                             pass
                         if process.poll() is not None:
                             raise RuntimeError('Isolated server failed; inspect outputs/session-context/server.log')
                         time.sleep(0.1)
+                    identity = client.post('/api/auth/login', json={'username':'ui-admin','password':'local-ui-password-123'})
+                    identity.raise_for_status()
+                    client.headers['X-CSRF-Token'] = identity.json()['csrf_token']
                     def wait(run_id, status):
                         for _ in range(150):
                             detail = client.get('/api/runs/'+run_id).json()
@@ -133,7 +141,53 @@ def verify():
                         errors = []
                         page.on('pageerror', lambda error: errors.append(str(error)))
                         page.goto(base+'/?project=session-ui', wait_until='domcontentloaded')
+                        page.get_by_label('员工账号',exact=True).fill('ui-admin')
+                        page.get_by_label('密码',exact=True).fill('local-ui-password-123')
+                        page.get_by_role('button',name='登录',exact=True).click()
                         expect(page.locator('.conversation')).to_have_count(8)
+                        page.get_by_role('button',name='员工管理',exact=True).click()
+                        employee_dialog=page.get_by_role('dialog')
+                        employee_dialog.get_by_label('账号',exact=True).fill('ui-viewer')
+                        employee_dialog.get_by_label('姓名',exact=True).fill('测试查看者')
+                        employee_dialog.get_by_label('初始密码',exact=True).fill('viewer-initial-password')
+                        employee_dialog.get_by_role('button',name='创建账号',exact=True).click()
+                        expect(employee_dialog.locator('.member-row').filter(has_text='ui-viewer')).to_be_visible()
+                        employee_dialog.get_by_role('button',name='关闭',exact=True).click()
+                        page.get_by_role('button',name='项目成员',exact=True).click()
+                        member_dialog=page.get_by_role('dialog')
+                        member_dialog.get_by_label('添加员工账号',exact=True).fill('ui-viewer')
+                        member_dialog.get_by_role('button',name='添加成员',exact=True).click()
+                        expect(member_dialog.locator('.member-row').filter(has_text='ui-viewer')).to_be_visible()
+                        member_dialog.get_by_label('调整权限：ui-viewer',exact=True).select_option('editor')
+                        member_dialog.get_by_label('调整权限：ui-viewer',exact=True).select_option('viewer')
+                        expect(member_dialog.get_by_label('调整权限：ui-viewer',exact=True)).to_have_value('viewer')
+                        expect(member_dialog.get_by_label('调整权限：ui-viewer',exact=True)).to_be_enabled()
+                        page.screenshot(path=str(output/'enterprise-members.png'),full_page=True)
+                        member_dialog.get_by_role('button',name='关闭',exact=True).click()
+                        with httpx.Client(base_url=base) as employee:
+                            signed=employee.post('/api/auth/login',json={'username':'ui-viewer','password':'viewer-initial-password'}).json()
+                            employee.headers['X-CSRF-Token']=signed['csrf_token']
+                            changed=employee.post('/api/auth/password',json={'current_password':'viewer-initial-password','new_password':'viewer-updated-password'})
+                            changed.raise_for_status()
+                        viewer=browser.new_page(viewport={'width':1440,'height':1000})
+                        viewer.on('pageerror',lambda error:errors.append(str(error)))
+                        viewer.goto(base,wait_until='domcontentloaded')
+                        viewer.get_by_label('员工账号',exact=True).fill('ui-viewer')
+                        viewer.get_by_label('密码',exact=True).fill('viewer-updated-password')
+                        viewer.get_by_role('button',name='登录',exact=True).click()
+                        expect(viewer.get_by_label('图像需求或修改意见')).to_be_disabled()
+                        expect(viewer.get_by_role('button',name='删除项目：Session 浏览器回归',exact=True)).to_have_count(0)
+                        expect(viewer.locator('.composer-hint')).to_contain_text('查看权限')
+                        page.get_by_role('button',name='项目成员',exact=True).click()
+                        member_dialog=page.get_by_role('dialog')
+                        member_dialog.get_by_label('调整权限：ui-viewer',exact=True).select_option('editor')
+                        expect(viewer.get_by_label('图像需求或修改意见')).to_be_enabled()
+                        member_dialog.get_by_label('调整权限：ui-viewer',exact=True).select_option('viewer')
+                        expect(viewer.get_by_label('图像需求或修改意见')).to_be_disabled()
+                        member_dialog.locator('.member-row').filter(has_text='ui-viewer').get_by_role('button',name='移除',exact=True).click()
+                        expect(viewer.locator('.project-row')).to_have_count(0)
+                        member_dialog.get_by_role('button',name='关闭',exact=True).click()
+                        viewer.close()
                         def send(text):
                             page.get_by_label('图像需求或修改意见').fill(text)
                             with page.expect_response(lambda response: response.request.method == 'POST' and response.url.endswith('/runs')) as result:
@@ -237,6 +291,9 @@ def verify():
                         other=browser.new_page(viewport={'width':1440,'height':1000})
                         other.on('pageerror',lambda error:errors.append(str(error)))
                         other.goto(base+'/?project=session-ui',wait_until='domcontentloaded')
+                        other.get_by_label('员工账号',exact=True).fill('ui-admin')
+                        other.get_by_label('密码',exact=True).fill('local-ui-password-123')
+                        other.get_by_role('button',name='登录',exact=True).click()
                         expect(other.locator('.conversation')).to_have_count(11)
                         page.get_by_role('button',name='删除项目：Session 浏览器回归',exact=True).click()
                         dialog.get_by_role('button',name='删除项目',exact=True).click()
@@ -292,7 +349,7 @@ def verify():
                               'delete_current_and_noncurrent': True, 'delete_last_and_recreate': True,
                               'delete_other_tab_updates': True, 'mobile_delete': True, 'dialog_keyboard': True,
                               'search_empty': True, 'composer_autogrow': True, 'jump_to_latest': True,
-                              'short_viewport_composer': True, 'browser_errors': errors}
+                              'short_viewport_composer': True, 'employee_management': True, 'project_membership': True, 'viewer_readonly': True, 'live_permission_revocation': True, 'browser_errors': errors}
                     (output/'summary.json').write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding='utf8')
                     print(json.dumps(report))
             finally:

@@ -2,6 +2,8 @@
 import base64
 import copy
 import hashlib
+import os
+import tempfile
 from pathlib import Path
 
 
@@ -22,7 +24,13 @@ def freeze_images(message, directory):
         path = Path(directory)/relative
         path.parent.mkdir(parents=True, exist_ok=True)
         if not path.exists():
-            path.write_bytes(content)
+            with tempfile.NamedTemporaryFile(dir=path.parent, delete=False) as output:
+                temporary = Path(output.name)
+                output.write(content)
+            try:
+                os.replace(temporary, path)
+            finally:
+                temporary.unlink(missing_ok=True)
         block.clear()
         block.update(type='image_ref', path=relative, sha256=digest,
                      mime_type=header[5:].split(';')[0])

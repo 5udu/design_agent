@@ -1,6 +1,7 @@
 """Run these against a disposable PostgreSQL DB with TEST_DATABASE_URL set."""
 import concurrent.futures
 import os
+from urllib.parse import urlparse
 import pytest
 from app.persistence.repositories import Store, uid
 from app.persistence.projects import delete_project
@@ -11,6 +12,8 @@ def storage(request, tmp_path):
     url = os.getenv('TEST_DATABASE_URL', '') if request.param == 'postgres' else ''
     if request.param == 'postgres' and not url:
         pytest.skip('TEST_DATABASE_URL is not set')
+    if url and not urlparse(url).path.rstrip('/').endswith('_test'):
+        raise pytest.UsageError('Destructive integration tests require a database name ending in _test')
     store = Store(tmp_path, url)
     yield store
     if store.postgres:

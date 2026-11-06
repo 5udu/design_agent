@@ -1,6 +1,7 @@
 .env
 .env.*
 !.env.example
+!.env.production.example
 .venv/
 .ocr-venv/
 __pycache__/
@@ -33,6 +34,7 @@ Thumbs.db
 # Public documentation and demo images are explicitly listed below.
 /docs/*
 !/docs/ARCHITECTURE.md
+!/docs/ENTERPRISE.md
 !/docs/evidence/
 /docs/evidence/*
 !/docs/evidence/image-agent/

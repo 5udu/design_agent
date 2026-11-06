@@ -93,7 +93,7 @@ class Auth:
         keys = ['account:'+username.strip().lower(), 'ip:'+address]
         with self.store.connect() as db:
             db.execute('BEGIN IMMEDIATE')
-            for key, maximum in zip(keys, (10, 50)):
+            for key, maximum in zip(keys, (10, 300)):
                 key = hashlib.sha256(key.encode()).hexdigest()
                 db.execute('INSERT INTO login_limits(key,attempts,expires_at) VALUES(?,1,?) ON CONFLICT(key) DO UPDATE SET attempts=CASE WHEN login_limits.expires_at<? THEN 1 ELSE login_limits.attempts+1 END, expires_at=CASE WHEN login_limits.expires_at<? THEN excluded.expires_at ELSE login_limits.expires_at END', (key, now+900, now, now))
                 row = db.execute('SELECT attempts FROM login_limits WHERE key=?', (key,)).fetchone()

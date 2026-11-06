@@ -46,6 +46,7 @@ def main():
                     project = json.loads(item['data'])
                     project['owner_id'] = row['id']
                     store._put(db, 'projects', project)
+                    db.execute('DELETE FROM project_members WHERE project_id=? AND user_id=?', (project['id'], row['id']))
                     auth.audit(None, 'operator_project_transfer', project['id'], {'owner_id': row['id']}, db)
                     count += 1
             print(f'Transferred {count} projects to {args.username}')

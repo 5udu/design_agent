@@ -48,7 +48,7 @@ async def security_headers(request: Request, call_next):
             session = await asyncio.to_thread(Auth(store).session, request.cookies.get(COOKIE))
             if not session:
                 return JSONResponse({'detail': '请先登录'}, status_code=401)
-            if not hmac.compare_digest(request.headers.get('x-csrf-token', ''), session['csrf_token']):
+            if not hmac.compare_digest(request.headers.get('x-csrf-token', '').encode(), session['csrf_token'].encode()):
                 return JSONResponse({'detail': '登录校验已失效，请刷新页面'}, status_code=403)
     response = await call_next(request)
     response.headers['X-Content-Type-Options'] = 'nosniff'
@@ -284,6 +284,7 @@ def create_run(project_id: str, body: RunCreate, user=Depends(current_user)):
         raise HTTPException(409, '当前项目已有进行中的任务') from None
     except KeyError:
         raise HTTPException(404, '项目不存在或已删除') from None
+    Auth(store).audit(user['id'], 'run_queued', run['id'])
     return run
 
 
@@ -298,7 +299,9 @@ def run_detail(run_id: str, user=Depends(current_user)):
 def resume_run(run_id: str, body: ResumeInput, user=Depends(current_user)):
     authorized_project(require('runs', run_id)['project_id'], user, write=True)
     try:
-        return store.resume(run_id, body.answer)
+        result = store.resume(run_id, body.answer)
+        Auth(store).audit(user['id'], 'run_resumed', run_id)
+        return result
     except ValueError as exc:
         raise HTTPException(409, str(exc)) from None
 
@@ -307,7 +310,9 @@ def resume_run(run_id: str, body: ResumeInput, user=Depends(current_user)):
 def cancel_run(run_id: str, user=Depends(current_user)):
     authorized_project(require('runs', run_id)['project_id'], user, write=True)
     try:
-        return store.cancel(run_id)
+        result = store.cancel(run_id)
+        Auth(store).audit(user['id'], 'run_cancelled', run_id)
+        return result
     except ValueError as exc:
         raise HTTPException(409, str(exc)) from None
 
@@ -330,18 +335,25 @@ async def events(session_id: str, request: Request, after: int = 0, user=Depends
     session = session['session']
     last = request.headers.get('last-event-id', '')
     cursor = max(after, int(last) if last.isdigit() else 0)
+    project = await asyncio.to_thread(store.get, 'projects', session['project_id'])
+    initial_role = await asyncio.to_thread(Auth(store).role, user, project) if project else None
 
     async def stream():
         nonlocal cursor
+        last_role = initial_role
         while not await request.is_disconnected():
             identity = await asyncio.to_thread(Auth(store).session, request.cookies.get(COOKIE))
             project = await asyncio.to_thread(store.get, 'projects', session['project_id'])
-            if not identity or identity['user']['must_change_password'] or (project and not await asyncio.to_thread(Auth(store).role, identity['user'], project)):
+            role = await asyncio.to_thread(Auth(store).role, identity['user'], project) if identity and project else None
+            if not identity or identity['user']['must_change_password'] or (project and not role):
                 yield 'event: access_revoked\ndata: {}\n\n'
                 return
             if not project:
                 yield 'event: project_deleted\ndata: '+json.dumps({'project_id': session['project_id']})+'\n\n'
                 return
+            if role != last_role:
+                yield 'event: permissions_changed\ndata: '+json.dumps({'role': role})+'\n\n'
+                last_role = role
             batch = await asyncio.to_thread(store.session_events, session_id, cursor)
             for event in batch:
                 cursor = event['seq']

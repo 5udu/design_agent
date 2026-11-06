@@ -1,9 +1,9 @@
 import {useEffect,useRef} from 'react';
 import {api} from '../../api/client';
-import type {AgentEvent,Conversation} from '../../types';
+import type {AgentEvent,Conversation,Project} from '../../types';
 
 type Binding={id:string;projectId:string;cursor:number};
-export function useSessionEvents(binding:Binding|null,handlers:{event:(event:AgentEvent)=>void;run:(detail:Conversation)=>void;error:(message:string)=>void;deleted:(projectId:string)=>void}){
+export function useSessionEvents(binding:Binding|null,handlers:{event:(event:AgentEvent)=>void;run:(detail:Conversation)=>void;error:(message:string)=>void;deleted:(projectId:string)=>void;permission:(role:NonNullable<Project['role']>)=>void}){
  const callbacks=useRef(handlers);callbacks.current=handlers;
  useEffect(()=>{
   if(!binding)return;
@@ -15,6 +15,7 @@ export function useSessionEvents(binding:Binding|null,handlers:{event:(event:Age
    disposed=true;stream.close();callbacks.current.deleted(binding.projectId);
   });
   stream.addEventListener('access_revoked',()=>{stream.close();if(!disposed){disposed=true;callbacks.current.deleted(binding.projectId);callbacks.current.error('项目访问权限已变更，请重新登录或选择其他项目');}});
+  stream.addEventListener('permissions_changed',message=>{if(!disposed)callbacks.current.permission(JSON.parse((message as MessageEvent).data).role);});
   stream.onmessage=message=>{
    if(disposed)return;
    const event:AgentEvent=JSON.parse(message.data);

@@ -127,6 +127,9 @@ async def test_live_stream_stops_when_membership_is_revoked(environment):
     server.settings.sse_poll_seconds = 0.1
     stream = await server.events(project['session_id'], Request(), 0, identities['viewer'])
     assert 'heartbeat' in await anext(stream.body_iterator)
+    owner.put(path+'/members/viewer', json={'role': 'editor'})
+    assert 'permissions_changed' in await anext(stream.body_iterator)
+    assert 'heartbeat' in await anext(stream.body_iterator)
     owner.delete(path+'/members/viewer')
     assert 'access_revoked' in await anext(stream.body_iterator)
     with pytest.raises(StopAsyncIteration):

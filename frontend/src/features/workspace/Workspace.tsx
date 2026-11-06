@@ -65,6 +65,7 @@ export function Workspace({account}:{account:ReactNode}){
  }
  useEffect(()=>{let disposed=false;loadProjects().then(list=>{if(disposed)return;if(list.length){const id=new URLSearchParams(location.search).get('project')||localStorage.getItem('packaging-project');void openProject(list.find(p=>p.id===id)?.id||list.at(-1)!.id);}else setLoading(false);}).catch(e=>{setError(e.message);setLoading(false);});return()=>{disposed=true;requestId.current++;};},[]);
  useSessionEvents(binding,{
+  permission:role=>{setProject(previous=>previous?{...previous,role}:previous);void loadProjects().catch(e=>setError(e.message));},
   event:event=>{
    const id=binding?.projectId;if(!id||projectId.current!==id||event.session_id!==binding?.id)return;
    setConversations(previous=>{
