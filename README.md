@@ -11,7 +11,7 @@ Design Agent 是一个面向产品效果图创作的图像 Agent。你描述目�
 
 项目使用 **DeepSeek** 进行决策与图像观察，使用 **Seedream** 生成和编辑图片，以 **LangGraph + PostgreSQL / SQLite** 保存执行进度。前端将对话、执行过程和图片结果放在同一个工作区。
 
-[企业部署](docs/ENTERPRISE.md) · [快速开始](#快速开始) · [使用方式](#使用方式) · [工作原理](#工作原理) · [配置](#配置) · [开发与测试](#开发与测试) · [架构文档](docs/ARCHITECTURE.md)
+[快速开始](#快速开始) · [使用方式](#使用方式) · [工作原理](#工作原理) · [配置](#配置) · [开发与测试](#开发与测试) · [架构文档](docs/ARCHITECTURE.md)
 
 ## 功能
 
@@ -33,7 +33,7 @@ Design Agent 是一个面向产品效果图创作的图像 Agent。你描述目�
 
 ## 企业内部使用
 
-已支持员工登录、项目负责人/编辑者/查看者权限、并发 worker、PostgreSQL 和容器部署。企业部署使用 [企业部署与运维指南](docs/ENTERPRISE.md)，包含管理员初始化、历史数据迁移、监控、备份恢复和扩容。
+已支持员工登录、项目负责人/编辑者/查看者权限、并发 worker、PostgreSQL 和容器部署。容器配置见 [compose.yaml](compose.yaml)，生产环境配置示例见 [.env.production.example](.env.production.example)。
 
 下面的快速开始用于本地开发与单机试用。
 
@@ -277,7 +277,6 @@ docs/               架构说明与演示图片
 
 ## 文档与参考
 
-- [企业部署与运维](docs/ENTERPRISE.md)：登录权限、并发、迁移、部署、备份与恢复。
 - [架构说明](docs/ARCHITECTURE.md)：Agent 循环、会话、上下文、事件与持久执行。
 
 README 的组织方式参考了 [Open Deep Research](https://github.com/langchain-ai/open_deep_research) 与 [Dexter](https://github.com/virattt/dexter) 的项目介绍、快速开始、配置和测试章节；本页内容以本仓库实现为准。
