@@ -25,6 +25,8 @@ class Settings(BaseSettings):
     context_summary_max_tokens: int = Field(default=4096, ge=128)
     ocr_url: str = 'http://127.0.0.1:8766'
     data_dir: Path = ROOT / 'data'
+    database_url: str = Field(default='', repr=False)
+    db_pool_size: int = Field(default=20, ge=4, le=100)
 
     def safe_error(self, error: object) -> str:
         value = str(error)

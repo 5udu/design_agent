@@ -14,6 +14,7 @@ class SessionJournal:
             with self.connect() as connection:
                 connection.execute('BEGIN IMMEDIATE')
                 return self.ensure_session(project_id, connection)
+        self.lock_row(db, 'projects', project_id)
         project_row = db.execute('SELECT data FROM projects WHERE id=?', (project_id,)).fetchone()
         if not project_row:
             raise KeyError(project_id)
@@ -36,6 +37,7 @@ class SessionJournal:
                                    call_id=call_id, source=source, model_data=model_data, db=connection)
         run = json.loads(db.execute('SELECT data FROM runs WHERE id=?', (run_id,)).fetchone()['data'])
         session_id = run.get('session_id') or self.ensure_session(run['project_id'], db)['id']
+        self.lock_row(db, 'sessions', session_id)
         if key:
             existing = db.execute('SELECT * FROM session_events WHERE session_id=? AND event_key=?',
                                   (session_id, key)).fetchone()
@@ -45,10 +47,11 @@ class SessionJournal:
                          (session_id,)).fetchone()[0]
         cursor = db.execute('''INSERT INTO session_events
             (session_id,seq,run_id,step_id,call_id,kind,source,data,model_data,event_key,created)
-            VALUES(?,?,?,?,?,?,?,?,?,?,?)''',
+            VALUES(?,?,?,?,?,?,?,?,?,?,?) RETURNING id''',
             (session_id, seq, run_id, step_id, call_id or data.get('call_id'), kind, source,
              encode(data), encode(model_data) if model_data is not None else None, key, time.time()))
-        return self._event_row(db.execute('SELECT * FROM session_events WHERE id=?', (cursor.lastrowid,)).fetchone())
+        event_id = cursor.fetchone()[0]
+        return self._event_row(db.execute('SELECT * FROM session_events WHERE id=?', (event_id,)).fetchone())
 
     @staticmethod
     def _event_row(row, private=False):

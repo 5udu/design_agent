@@ -64,12 +64,13 @@ def collect_garbage(store):
 
 
 def delete_project(store, project_id):
-    with project_lock(store.directory, project_id):
+    with store.project_lock(project_id):
         with store.connect() as db:
             checkpoint_path = store.directory/'checkpoints.db'
-            if checkpoint_path.exists():
+            if not store.postgres and checkpoint_path.exists():
                 db.execute('ATTACH DATABASE ? AS execution', (str(checkpoint_path),))
             db.execute('BEGIN IMMEDIATE')
+            store.lock_row(db, 'projects', project_id)
             if not db.execute('SELECT 1 FROM projects WHERE id=?', (project_id,)).fetchone():
                 raise KeyError(project_id)
             if db.execute("SELECT 1 FROM runs WHERE project_id=? AND status IN ('queued','running','waiting_user')", (project_id,)).fetchone():
@@ -81,7 +82,9 @@ def delete_project(store, project_id):
             # Validate every candidate before any records are changed.
             paths = {str(cleanup_path(store.directory, path).relative_to(store.directory.resolve())) for path in paths}
             runs = db.execute('SELECT COUNT(*) FROM runs WHERE project_id=?', (project_id,)).fetchone()[0]
-            if checkpoint_path.exists():
+            if store.postgres:
+                db.execute('INSERT INTO checkpoint_cleanup(run_id) SELECT id FROM runs WHERE project_id=? ON CONFLICT(run_id) DO NOTHING', (project_id,))
+            elif checkpoint_path.exists():
                 for table in ('checkpoints', 'writes'):
                     if db.execute("SELECT 1 FROM execution.sqlite_master WHERE type='table' AND name=?", (table,)).fetchone():
                         db.execute(f'DELETE FROM execution.{table} WHERE thread_id IN (SELECT id FROM main.runs WHERE project_id=?)', (project_id,))
@@ -90,7 +93,7 @@ def delete_project(store, project_id):
             for table in ('sessions', 'assets', 'versions', 'runs'):
                 db.execute(f'DELETE FROM {table} WHERE project_id=?', (project_id,))
             db.execute('DELETE FROM projects WHERE id=?', (project_id,))
-            db.executemany('INSERT OR IGNORE INTO file_cleanup(path) VALUES(?)', [(path,) for path in paths])
+            db.executemany('INSERT INTO file_cleanup(path) VALUES(?) ON CONFLICT(path) DO NOTHING', [(path,) for path in paths])
         # Checkpoint transactions finish before taking the preview lock: an
         # async worker may still be committing another project's checkpoint.
         pending = collect_garbage(store)

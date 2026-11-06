@@ -13,12 +13,23 @@ def uid() -> str:
 
 
 class Store(SessionJournal):
-    def __init__(self, directory: Path):
+    def __init__(self, directory: Path, database_url: str = '', pool_size: int = 20):
         self.directory = Path(directory)
         self.directory.mkdir(parents=True, exist_ok=True)
         self.path = self.directory / 'application.db'
+        self.database_url = database_url
+        self.postgres = bool(database_url)
+        self.pool = None
+        if self.postgres:
+            from psycopg.rows import dict_row
+            from psycopg_pool import ConnectionPool
+            self.pool = ConnectionPool(database_url, min_size=1, max_size=pool_size,
+                                       kwargs={'row_factory': dict_row}, timeout=15, open=True)
+            self.pool.wait()
         with self.connect() as db:
-            db.executescript('''
+            if self.postgres:
+                db.execute('SELECT pg_advisory_xact_lock(91020601)')
+            schema = '''
             CREATE TABLE IF NOT EXISTS projects(id TEXT PRIMARY KEY, data TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS runs(id TEXT PRIMARY KEY, project_id TEXT NOT NULL, status TEXT NOT NULL, data TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS assets(id TEXT PRIMARY KEY, project_id TEXT NOT NULL, data TEXT NOT NULL);
@@ -33,14 +44,44 @@ class Store(SessionJournal):
                 UNIQUE(session_id,seq), UNIQUE(session_id,event_key));
             CREATE INDEX IF NOT EXISTS session_event_run ON session_events(run_id,seq);
             CREATE UNIQUE INDEX IF NOT EXISTS one_active_run_per_project ON runs(project_id) WHERE status IN ('queued','running','waiting_user');
+            '''
+            if self.postgres:
+                schema = schema.replace('INTEGER PRIMARY KEY AUTOINCREMENT', 'BIGSERIAL PRIMARY KEY').replace(' REAL ', ' DOUBLE PRECISION ')
+                for table in ('projects', 'runs', 'assets', 'versions', 'tool_runs'):
+                    schema = schema.replace(f'{table}(id TEXT', f'{table}(ordinal BIGSERIAL UNIQUE, id TEXT')
+            db.executescript(schema)
+            # Forward-only, additive schema migration, safe for existing local data.
+            for table in ('projects', 'runs'):
+                columns = ('owner_id TEXT', 'created_at DOUBLE PRECISION NOT NULL DEFAULT 0') if table == 'projects' else (
+                    'user_id TEXT', 'created_at DOUBLE PRECISION NOT NULL DEFAULT 0',
+                    'lease_token TEXT', 'lease_until DOUBLE PRECISION', 'worker_id TEXT')
+                existing = {r['column_name'] for r in db.execute('SELECT column_name FROM information_schema.columns WHERE table_schema=current_schema() AND table_name=?', (table,))} if self.postgres else {r['name'] for r in db.execute(f'PRAGMA table_info({table})')}
+                for column in columns:
+                    if column.split()[0] not in existing:
+                        db.execute(f'ALTER TABLE {table} ADD COLUMN {column}')
+            db.executescript('''
+            CREATE INDEX IF NOT EXISTS runs_queue ON runs(status,created_at);
+            CREATE INDEX IF NOT EXISTS runs_user_status ON runs(user_id,status);
+            CREATE INDEX IF NOT EXISTS assets_project ON assets(project_id);
+            CREATE INDEX IF NOT EXISTS versions_project ON versions(project_id);
+            CREATE INDEX IF NOT EXISTS tool_runs_run ON tool_runs(run_id);
+            CREATE TABLE IF NOT EXISTS checkpoint_cleanup(run_id TEXT PRIMARY KEY);
+            CREATE TABLE IF NOT EXISTS schema_migrations(version INTEGER PRIMARY KEY);
+            INSERT INTO schema_migrations(version) VALUES(1) ON CONFLICT(version) DO NOTHING;
             ''')
         from app.session.migration import migrate
-        migrate(self)
+        if not self.postgres:
+            migrate(self)
         from app.persistence.projects import collect_garbage
         collect_garbage(self)
 
     @contextmanager
     def connect(self):
+        if self.postgres:
+            from app.persistence.database import PostgresConnection
+            with self.pool.connection() as connection:
+                yield PostgresConnection(connection)
+            return
         db = sqlite3.connect(self.path, timeout=15)
         db.row_factory = sqlite3.Row
         db.execute('PRAGMA journal_mode=WAL')
@@ -52,6 +93,26 @@ class Store(SessionJournal):
             raise
         finally:
             db.close()
+
+    def close(self):
+        if self.pool:
+            self.pool.close()
+
+    def project_lock(self, project_id):
+        if self.postgres:
+            from app.persistence.database import postgres_project_lock
+            return postgres_project_lock(self.pool, project_id)
+        from app.persistence.locking import project_lock
+        return project_lock(self.directory, project_id)
+
+    def lock_row(self, db, table, key):
+        assert table in {'projects', 'runs', 'sessions'}
+        if self.postgres:
+            db.execute(f'SELECT id FROM {table} WHERE id=? FOR UPDATE', (key,)).fetchone()
+
+    @property
+    def order_column(self):
+        return 'ordinal' if self.postgres else 'rowid'
 
     def put(self, table, item):
         assert table in {'projects', 'runs', 'assets', 'versions', 'tool_runs'}
@@ -73,6 +134,11 @@ class Store(SessionJournal):
             values['project_id'] = item['project_id']
         if table == 'runs':
             values['status'] = item['status']
+            values['user_id'] = item.get('user_id')
+        if table == 'projects':
+            values['owner_id'] = item.get('owner_id')
+        if table in {'runs', 'projects'}:
+            values['created_at'] = item.get('created_at', time.time())
         if table == 'tool_runs':
             values['run_id'] = item['run_id']
         values['data'] = json.dumps(item, ensure_ascii=False)
@@ -89,7 +155,7 @@ class Store(SessionJournal):
     def list(self, table, project_id=None):
         assert table in {'projects', 'runs', 'assets', 'versions', 'tool_runs'}
         with self.connect() as db:
-            rows = db.execute(f'SELECT data FROM {table}' + (' WHERE project_id=?' if project_id else '') + ' ORDER BY rowid', (project_id,) if project_id else ()).fetchall()
+            rows = db.execute(f'SELECT data FROM {table}' + (' WHERE project_id=?' if project_id else '') + f' ORDER BY {self.order_column}', (project_id,) if project_id else ()).fetchall()
         return [json.loads(r['data']) for r in rows]
 
     def update_run(self, run_id, **fields):
@@ -100,7 +166,8 @@ class Store(SessionJournal):
 
     @staticmethod
     def _update_run(db, run_id, fields):
-        row = db.execute('SELECT data FROM runs WHERE id=?', (run_id,)).fetchone()
+        suffix = ' FOR UPDATE' if getattr(db, 'dialect', '') == 'postgres' else ''
+        row = db.execute('SELECT data FROM runs WHERE id=?'+suffix, (run_id,)).fetchone()
         if not row:
             raise KeyError(run_id)
         value = json.loads(row['data'])
@@ -111,6 +178,7 @@ class Store(SessionJournal):
     def enqueue(self, run, context, system):
         with self.connect() as db:
             db.execute('BEGIN IMMEDIATE')
+            self.lock_row(db, 'projects', run['project_id'])
             if not db.execute('SELECT 1 FROM projects WHERE id=?', (run['project_id'],)).fetchone():
                 raise KeyError(run['project_id'])
             run = {**run, 'session_id': self.ensure_session(run['project_id'], db)['id']}
@@ -131,6 +199,7 @@ class Store(SessionJournal):
     def resume(self, run_id, answer):
         with self.connect() as db:
             db.execute('BEGIN IMMEDIATE')
+            self.lock_row(db, 'runs', run_id)
             row = db.execute('SELECT data,status FROM runs WHERE id=?', (run_id,)).fetchone()
             if not row:
                 raise KeyError(run_id)
@@ -146,7 +215,8 @@ class Store(SessionJournal):
     def claim(self):
         with self.connect() as db:
             db.execute('BEGIN IMMEDIATE')
-            row = db.execute("SELECT data FROM runs WHERE status='queued' ORDER BY rowid LIMIT 1").fetchone()
+            suffix = ' FOR UPDATE SKIP LOCKED' if self.postgres else ''
+            row = db.execute(f"SELECT data FROM runs WHERE status='queued' ORDER BY {self.order_column} LIMIT 1"+suffix).fetchone()
             if not row:
                 return None
             item = json.loads(row['data'])
@@ -157,6 +227,7 @@ class Store(SessionJournal):
     def cancel(self, run_id):
         with self.connect() as db:
             db.execute('BEGIN IMMEDIATE')
+            self.lock_row(db, 'runs', run_id)
             row = db.execute('SELECT data,status FROM runs WHERE id=?', (run_id,)).fetchone()
             if not row:
                 raise KeyError(run_id)
@@ -193,5 +264,5 @@ class Store(SessionJournal):
 
     def tool_calls(self, run_id):
         with self.connect() as db:
-            rows = db.execute('SELECT data FROM tool_runs WHERE run_id=? ORDER BY rowid', (run_id,)).fetchall()
+            rows = db.execute(f'SELECT data FROM tool_runs WHERE run_id=? ORDER BY {self.order_column}', (run_id,)).fetchall()
         return [json.loads(r['data']) for r in rows]
