@@ -9,9 +9,9 @@
 
 Design Agent 是一个面向产品效果图创作的图像 Agent。你描述目标，Agent 选择工具生成图片、查看实际结果，并根据反馈继续编辑；需要补充关键信息时，它会暂停提问，收到回答后继续。
 
-项目使用 **DeepSeek** 进行决策与图像观察，使用 **Seedream** 生成和编辑图片，以 **LangGraph + SQLite** 保存执行进度。前端将对话、执行过程和图片结果放在同一个工作区。
+项目使用 **DeepSeek** 进行决策与图像观察，使用 **Seedream** 生成和编辑图片，以 **LangGraph + PostgreSQL / SQLite** 保存执行进度。前端将对话、执行过程和图片结果放在同一个工作区。
 
-[快速开始](#快速开始) · [使用方式](#使用方式) · [工作原理](#工作原理) · [配置](#配置) · [开发与测试](#开发与测试) · [架构文档](docs/ARCHITECTURE.md)
+[企业部署](docs/ENTERPRISE.md) · [快速开始](#快速开始) · [使用方式](#使用方式) · [工作原理](#工作原理) · [配置](#配置) · [开发与测试](#开发与测试) · [架构文档](docs/ARCHITECTURE.md)
 
 ## 功能
 
@@ -30,6 +30,12 @@ Design Agent 是一个面向产品效果图创作的图像 Agent。你描述目�
 | 首次生成 | 参考图编辑 |
 | --- | --- |
 | ![红白国潮饭盒](docs/evidence/image-agent/red-lunchbox.png) | ![深蓝国潮饭盒](docs/evidence/image-agent/blue-lunchbox.png) |
+
+## 企业内部使用
+
+已支持员工登录、项目负责人/编辑者/查看者权限、并发 worker、PostgreSQL 和容器部署。企业部署使用 [企业部署与运维指南](docs/ENTERPRISE.md)，包含管理员初始化、历史数据迁移、监控、备份恢复和扩容。
+
+下面的快速开始用于本地开发与单机试用。
 
 ## 快速开始
 
@@ -60,14 +66,24 @@ SEEDREAM_API_KEY=your_seedream_api_key
 
 真实对话和图像请求会调用对应供应商并产生费用。`.env` 已被 Git 忽略；示例文件只包含空密钥和默认配置。
 
-### 3. 启动工作区
+### 3. 初始化管理员
+
+```powershell
+.\.venv\Scripts\python.exe -m app.manage create-admin admin
+# 升级旧版本时，显式将无负责人的历史项目交给该账号：
+.\.venv\Scripts\python.exe -m app.manage adopt-unowned admin
+```
+
+密码通过交互输入。首次登录需要修改初始密码。管理员可以在“员工管理”创建同事账号，项目负责人可以在“项目成员”设置共享权限。
+
+### 4. 启动工作区
 
 ```powershell
 .\scripts\start.ps1
 ```
 
 - 工作区：<http://127.0.0.1:8000>
-- API 文档：<http://127.0.0.1:8000/docs>
+- 存活检查：<http://127.0.0.1:8000/api/health/live>；API 文档：<http://127.0.0.1:8000/docs>
 
 脚本在后台启动 API 和 worker；新安装首次打开时，从创建项目开始。
 
@@ -201,7 +217,7 @@ npm --prefix frontend test
 npm --prefix frontend run build
 ```
 
-当前验证包含 **81 项后端测试、6 项前端测试**，覆盖工具调用、任务恢复、思考强度、会话迁移、上下文压缩、事件投影与项目删除。离线测试使用本地替身。
+验证覆盖工具调用、任务恢复、思考强度、会话迁移、上下文压缩、事件投影、项目删除，以及员工登录、项目权限、并发任务、执行租约和迁移恢复。设置独立的 TEST_DATABASE_URL 后会同时验证 PostgreSQL；测试库必须可丢弃。模型调用使用本地替身。
 
 前端开发可在后端服务运行时另开终端执行：
 
@@ -209,7 +225,7 @@ npm --prefix frontend run build
 npm --prefix frontend run dev
 ```
 
-Vite 会输出开发地址，`/api` 请求代理至 `127.0.0.1:8000`。
+Vite 会输出开发地址，`/api` 请求代理至 `127.0.0.1:8000`。将后端 APP_ORIGIN 配置为 Vite 的实际页面地址，以通过请求来源校验。
 
 <details>
 <summary>运行完整页面回归</summary>
@@ -236,8 +252,11 @@ backend/
     tools/          五个工具的定义、注册和实现
     runtime/        worker、执行网关与结果保存
     providers/      DeepSeek、Seedream 与 OCR 适配
-    persistence/    SQLite、文件与项目清理
+    persistence/    PostgreSQL / SQLite、文件与项目清理
     domain/         领域模型
+    auth.py         员工账号、登录与项目权限
+    manage.py       操作员账号管理
+    migrate.py      SQLite 到 PostgreSQL 迁移
     main.py         FastAPI 接口
   tests/            后端离线测试
 frontend/
@@ -251,13 +270,14 @@ docs/               架构说明与演示图片
 
 ## 当前边界
 
-- 当前运行方式为本机 API、单 worker 与 SQLite，面向本地使用；未实现多用户认证和服务端多租户隔离。
+- 当前面向单企业内部使用，采用管理员创建账号和项目成员权限。生产部署为单服务器上的 PostgreSQL 与多个 worker，图片使用共享持久卷；企业统一登录、跨服务器高可用和费用管理尚未实现。
 - 整图编辑可能改变非目标区域，图片中的文字、Logo 与产品细节需要实际核对。
 - 上下文压缩依赖模型摘要，存在信息损失；超长且无法在预算内整理的输入会明确失败并保留原始记录。
 - 当前示例和测试验证了执行机制与特定创作案例，尚未进行广泛图像质量或长期记忆质量评测。
 
 ## 文档与参考
 
+- [企业部署与运维](docs/ENTERPRISE.md)：登录权限、并发、迁移、部署、备份与恢复。
 - [架构说明](docs/ARCHITECTURE.md)：Agent 循环、会话、上下文、事件与持久执行。
 
 README 的组织方式参考了 [Open Deep Research](https://github.com/langchain-ai/open_deep_research) 与 [Dexter](https://github.com/virattt/dexter) 的项目介绍、快速开始、配置和测试章节；本页内容以本仓库实现为准。
