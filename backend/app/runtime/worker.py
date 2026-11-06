@@ -17,8 +17,10 @@ from app.agent.graph import build_graph, initial_state
 
 
 async def process_run(graph, store, run, config=settings):
-    lock = store.project_lock(run['project_id'])
     while True:
+        # PostgreSQL's generator context manager is single-use, including when
+        # acquisition raises LockBusy; obtain a fresh one on every retry.
+        lock = store.project_lock(run['project_id'])
         try:
             lock.__enter__()
             break

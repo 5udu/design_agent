@@ -1,5 +1,7 @@
 import asyncio
 import concurrent.futures
+import threading
+from contextlib import contextmanager
 import pytest
 from app.config import Settings
 from app.persistence.repositories import Store, uid
@@ -122,4 +124,82 @@ async def test_waiting_run_resumes_after_checkpoint_connection_restart(storage):
     async with checkpoint_saver(store) as cp:
         graph = build_graph(store, model, Gateway(store, Images(), config), config, cp)
         await execute_claim(graph, store, store.claim(), config)
+    assert store.get('runs', run['id'])['status'] == 'succeeded'
+
+
+@pytest.mark.parametrize('action', ['resume', 'cancel'])
+def test_lease_release_preserves_concurrent_user_action(storage, monkeypatch, action):
+    store = storage
+    run = enqueue(store)
+    claimed = store.claim()
+    store.update_run(run['id'], status='waiting_user', question={'question': '颜色？'}, resume_answer=None)
+    api_store = Store(store.directory, store.database_url)
+    read = threading.Event()
+    finish_release = threading.Event()
+    connect = store.connect
+
+    class PausedCursor:
+        def __init__(self, cursor):
+            self.cursor = cursor
+
+        def fetchone(self):
+            row = self.cursor.fetchone()
+            read.set()
+            assert finish_release.wait(5)
+            return row
+
+    class Connection:
+        def __init__(self, db):
+            self.db = db
+
+        def __getattr__(self, name):
+            return getattr(self.db, name)
+
+        def execute(self, sql, args=()):
+            cursor = self.db.execute(sql, args)
+            if sql.startswith('SELECT data,status FROM runs WHERE id=? AND lease_token=?'):
+                return PausedCursor(cursor)
+            return cursor
+
+    @contextmanager
+    def paused_connection():
+        with connect() as db:
+            yield Connection(db)
+
+    monkeypatch.setattr(store, 'connect', paused_connection)
+    try:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+            release = pool.submit(store.release_lease, run['id'], claimed['_lease_token'])
+            assert read.wait(5)
+            mutate = pool.submit(api_store.resume, run['id'], '蓝色') if action == 'resume' else pool.submit(api_store.cancel, run['id'])
+            try:
+                # Without the row lock this commits before release writes its
+                # stale snapshot. With it, the user action waits until commit.
+                mutate.result(timeout=0.5)
+            except concurrent.futures.TimeoutError:
+                pass
+            finally:
+                finish_release.set()
+            release.result(timeout=5)
+            mutate.result(timeout=5)
+        actual = api_store.get('runs', run['id'])
+        assert actual['status'] == ('queued' if action == 'resume' else 'cancelled')
+        if action == 'resume':
+            assert actual['resume_answer'] == '蓝色'
+    finally:
+        finish_release.set()
+        api_store.close()
+
+
+async def test_worker_retries_a_busy_project_lock(storage):
+    store = storage
+    config = Settings(_env_file=None, data_dir=store.directory)
+    run = enqueue(store)
+    claimed = store.claim()
+    async with checkpoint_saver(store) as cp:
+        graph = build_graph(store, Model([response()]), Gateway(store, Images(), config), config, cp)
+        with store.project_lock(run['project_id']):
+            task = asyncio.create_task(execute_claim(graph, store, claimed, config))
+            await asyncio.sleep(0.15)
+        await asyncio.wait_for(task, timeout=10)
     assert store.get('runs', run['id'])['status'] == 'succeeded'

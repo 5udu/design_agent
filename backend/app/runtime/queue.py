@@ -43,6 +43,9 @@ class TaskQueue:
     def release_lease(self, run_id, token):
         with self.connect() as db:
             self.queue_lock(db)
+            # API resume/cancel takes this same row lock. Serialize their
+            # read/modify/write with lease release so no user action is lost.
+            self.lock_row(db, 'runs', run_id)
             row = db.execute('SELECT data,status FROM runs WHERE id=? AND lease_token=?', (run_id, token)).fetchone()
             if not row:
                 return
