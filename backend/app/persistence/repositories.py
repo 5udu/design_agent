@@ -6,13 +6,15 @@ import uuid
 from pathlib import Path
 from contextlib import contextmanager
 from app.session.journal import SessionJournal, encode
+from app.runtime.queue import TaskQueue
+from app.runtime.leases import check_lease
 
 
 def uid() -> str:
     return uuid.uuid4().hex
 
 
-class Store(SessionJournal):
+class Store(SessionJournal, TaskQueue):
     def __init__(self, directory: Path, database_url: str = '', pool_size: int = 20):
         self.directory = Path(directory)
         self.directory.mkdir(parents=True, exist_ok=True)
@@ -66,9 +68,15 @@ class Store(SessionJournal):
             CREATE INDEX IF NOT EXISTS versions_project ON versions(project_id);
             CREATE INDEX IF NOT EXISTS tool_runs_run ON tool_runs(run_id);
             CREATE TABLE IF NOT EXISTS checkpoint_cleanup(run_id TEXT PRIMARY KEY);
+            CREATE TABLE IF NOT EXISTS worker_dispatch(user_id TEXT PRIMARY KEY,last_started DOUBLE PRECISION NOT NULL);
+            CREATE TABLE IF NOT EXISTS workers(id TEXT PRIMARY KEY,updated_at DOUBLE PRECISION NOT NULL);
             CREATE TABLE IF NOT EXISTS schema_migrations(version INTEGER PRIMARY KEY);
             INSERT INTO schema_migrations(version) VALUES(1) ON CONFLICT(version) DO NOTHING;
             ''')
+            from app.auth import Auth
+            # Reuse the initialization transaction (including its PostgreSQL lock).
+            # Auth schema is initialized below after this connection commits.
+        Auth(self).initialize()
         from app.session.migration import migrate
         if not self.postgres:
             migrate(self)
@@ -80,12 +88,17 @@ class Store(SessionJournal):
         if self.postgres:
             from app.persistence.database import PostgresConnection
             with self.pool.connection() as connection:
-                yield PostgresConnection(connection)
+                db = PostgresConnection(connection)
+                check_lease(self, db)
+                yield db
             return
-        db = sqlite3.connect(self.path, timeout=15)
-        db.row_factory = sqlite3.Row
+        from app.persistence.database import SQLiteConnection
+        connection = sqlite3.connect(self.path, timeout=15)
+        connection.row_factory = sqlite3.Row
+        db = SQLiteConnection(connection)
         db.execute('PRAGMA journal_mode=WAL')
         try:
+            check_lease(self, db)
             yield db
             db.commit()
         except BaseException:
@@ -210,18 +223,6 @@ class Store(SessionJournal):
             item.update(resume_answer=answer, status='queued', question=None, updated_at=time.time())
             db.execute('UPDATE runs SET data=?,status=? WHERE id=?', (json.dumps(item, ensure_ascii=False), 'queued', run_id))
             self.append(run_id, 'user_answer', {'text': answer, 'question': question}, source='user', db=db)
-        return item
-
-    def claim(self):
-        with self.connect() as db:
-            db.execute('BEGIN IMMEDIATE')
-            suffix = ' FOR UPDATE SKIP LOCKED' if self.postgres else ''
-            row = db.execute(f"SELECT data FROM runs WHERE status='queued' ORDER BY {self.order_column} LIMIT 1"+suffix).fetchone()
-            if not row:
-                return None
-            item = json.loads(row['data'])
-            item.update(status='running', updated_at=time.time())
-            db.execute('UPDATE runs SET status=?,data=? WHERE id=?', ('running', json.dumps(item, ensure_ascii=False), item['id']))
         return item
 
     def cancel(self, run_id):

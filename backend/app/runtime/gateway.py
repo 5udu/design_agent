@@ -6,6 +6,8 @@ from app.persistence.assets import Assets
 from app.providers.ocr import OCR
 from app.tools.base import ToolContext
 from app.tools.registry import REGISTRY
+from app.auth import require_run_access
+from app.runtime.leases import LeaseLost
 
 
 class Gateway:
@@ -15,6 +17,7 @@ class Gateway:
         self.ocr = OCR(config)
 
     async def _submit_image(self, run, record, prompt, reference, size):
+        require_run_access(self.store, run)
         submissions = [call for call in self.store.tool_calls(run['id']) if call.get('submitted_at')]
         if any(call['status'] in {'submitted', 'unknown'} for call in submissions):
             raise ValueError('存在状态未知的图像请求，需要先核实，不能重复生成')
@@ -66,6 +69,8 @@ class Gateway:
             # only after the checkpoint is durable; it must not become a failure.
             raise
         except Exception as exc:
+            if isinstance(exc, LeaseLost):
+                raise
             uncertain = record.get('status') == 'submitted' and type(exc).__name__ in {'ReadTimeout', 'ReadError', 'RemoteProtocolError'}
             result = {'status': 'failed', 'error_code': 'unknown_submission' if uncertain else 'tool_error',
                       'message': self.config.safe_error(exc)}

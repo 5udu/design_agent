@@ -17,8 +17,8 @@ if (Test-Path -LiteralPath $ocrPython) {
 } else { Write-Output 'OCR not installed: run scripts\setup-ocr.ps1 for local text recognition.' }
 $apiActive = $false
 try {
-    $health = Invoke-RestMethod -Uri 'http://127.0.0.1:8000/api/health' -TimeoutSec 3
-    $apiActive = $health.status -eq 'ok' -and $health.models.agent -eq 'deepseek-flash'
+    $health = Invoke-RestMethod -Uri 'http://127.0.0.1:8000/api/health/ready' -TimeoutSec 3
+    $apiActive = $health.status -eq 'ok'
 } catch { }
 if (-not $apiActive) {
     $apiProcess = Start-Process -FilePath $pythonExe -ArgumentList @('-m','uvicorn','app.main:app','--host','127.0.0.1','--port','8000') -WorkingDirectory $projectRoot -WindowStyle Hidden -RedirectStandardOutput (Join-Path $logsPath 'api.out.log') -RedirectStandardError (Join-Path $logsPath 'api.err.log') -PassThru
@@ -31,7 +31,7 @@ if ($LASTEXITCODE -ne 0) {
 }
 $apiReady = $false
 for ($attempt = 0; $attempt -lt 20; $attempt++) {
-    try { $apiReady = (Invoke-RestMethod -Uri 'http://127.0.0.1:8000/api/health' -TimeoutSec 2).status -eq 'ok' } catch { }
+    try { $apiReady = (Invoke-RestMethod -Uri 'http://127.0.0.1:8000/api/health/ready' -TimeoutSec 2).status -eq 'ok' } catch { }
     if ($apiReady) { break }
     Start-Sleep -Milliseconds 500
 }

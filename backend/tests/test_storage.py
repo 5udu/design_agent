@@ -15,7 +15,7 @@ def storage(request, tmp_path):
     yield store
     if store.postgres:
         with store.connect() as db:
-            for table in ('session_events', 'tool_runs', 'sessions', 'assets', 'versions', 'runs', 'projects', 'checkpoint_cleanup'):
+            for table in ('session_events', 'tool_runs', 'sessions', 'assets', 'versions', 'runs', 'projects', 'checkpoint_cleanup', 'worker_dispatch', 'workers', 'project_members', 'auth_sessions', 'users', 'login_limits', 'audit_log'):
                 db.execute(f'DELETE FROM {table}')
     store.close()
 

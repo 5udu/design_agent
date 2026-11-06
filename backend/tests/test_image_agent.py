@@ -2,7 +2,7 @@ import io,json
 import httpx
 import pytest
 from PIL import Image
-from fastapi.testclient import TestClient
+from auth_helpers import signed_in_client
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from app.config import Settings
 from app.domain.models import ProjectCreate
@@ -103,7 +103,7 @@ async def test_reference_validation_history_and_full_conversation_api(tmp_path,m
     project['current_image_id']=created['artifact']['id'];store.put('projects',project)
     store.put('assets',{'id':'foreign','project_id':'other'})
     monkeypatch.setattr(server,'store',store);monkeypatch.setattr(server,'assets',gateway.assets);monkeypatch.setattr(server,'settings',config)
-    with TestClient(server.app) as client:
+    with signed_in_client(server) as client:
         assert client.post('/api/projects/p/runs',json={'message':'修改','target_asset_id':'foreign'}).status_code==400
         result=client.post('/api/projects/p/runs',json={'message':'改蓝色'}).json()
         assert result['target_asset_id']==created['artifact']['id']
@@ -179,7 +179,7 @@ def test_api_exposes_only_image_project_inputs_and_current_routes(tmp_path,monke
     import app.main as server
     config,store,_,_,_,gateway=setup(tmp_path)
     monkeypatch.setattr(server,'store',store);monkeypatch.setattr(server,'assets',gateway.assets);monkeypatch.setattr(server,'settings',config)
-    with TestClient(server.app) as client:
+    with signed_in_client(server) as client:
         project=client.post('/api/projects',json={'name':'新图像项目'})
         assert project.status_code==201 and 'mode' not in project.json()
         assert client.post('/api/projects',json={'name':'旧模式','mode':'editable_packaging'}).status_code==422

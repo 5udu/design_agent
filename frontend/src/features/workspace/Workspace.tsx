@@ -1,4 +1,6 @@
 import {useEffect,useRef,useState} from 'react';
+import type {ReactNode} from 'react';
+import {ProjectMembers} from './ProjectMembers';
 import {api} from '../../api/client';
 import {AgentTrace} from './AgentTrace';
 import {mergeEvents,reconcileConversation} from './traceProjection';
@@ -14,7 +16,8 @@ import type {Project,Asset,Run,Conversation,ProjectDetail,AgentEvent} from '../.
 function Text({value}:{value:string}){return <p className="message-text">{value.split(/(\*\*[^*]+\*\*)/g).map((part,i)=>part.startsWith('**')?<strong key={i}>{part.slice(2,-2)}</strong>:part)}</p>;}
 const states:Record<string,string>={queued:'排队中',running:'正在创作',waiting_user:'等待你的回答',succeeded:'',partial:'本轮保留了部分结果',failed:'本轮未完成',cancelled:'已结束'};
 
-export function Workspace(){
+export function Workspace({account}:{account:ReactNode}){
+ const [membersOpen,setMembersOpen]=useState(false);
  const [reasoningEffort,setReasoningEffort]=useReasoningEffort();
  const [projects,setProjects]=useState<Project[]>([]),[project,setProject]=useState<Project|null>(null),[assets,setAssets]=useState<Asset[]>([]),[conversations,setConversations]=useState<Conversation[]>([]);
  const [activeId,setActiveId]=useState(''),[message,setMessage]=useState(''),[reference,setReference]=useState('');
@@ -26,13 +29,14 @@ export function Workspace(){
  const projectId=useRef(''),requestId=useRef(0),scroll=useRef<HTMLDivElement>(null),bottom=useRef<HTMLDivElement>(null),stick=useRef(true),input=useRef<HTMLTextAreaElement>(null);
  const active=conversations.find(c=>c.run.id===activeId)?.run;
  const busy=!!active&&['queued','running'].includes(active.status),waiting=active?.status==='waiting_user';
+ const readonly=project?.role==='viewer';
  const refAsset=assets.find(a=>a.id===reference);
  function upsert(run:Run,events?:AgentEvent[]){setConversations(previous=>{
   const found=previous.find(c=>c.run.id===run.id);
   const merged=reconcileConversation(found,run,events);
   return found?previous.map(c=>c.run.id===run.id?merged:c):[...previous,merged];
  });}
- async function loadProjects(){const list=await api<Project[]>('/projects');setProjects(list);return list;}
+ async function loadProjects(){const list:Project[]=[];while(true){const page=await api<Project[]>('/projects?limit=200&offset='+list.length);list.push(...page);if(page.length<200)break;}setProjects(list.reverse());return list;}
  async function openProject(id:string){
   const ticket=++requestId.current;setBinding(null);projectId.current=id;setLoading(true);setError('');setActiveId('');setConversations([]);setAssets([]);setReference('');setSidebar(false);setMessage('');setPreview(null);setShowLatest(false);
   try{const d=await api<ProjectDetail>('/projects/'+id+'?include_events=true');if(ticket!==requestId.current)return;
@@ -83,7 +87,8 @@ export function Workspace(){
  useEffect(()=>{if(input.current){input.current.style.height='auto';input.current.style.height=Math.min(160,Math.max(44,input.current.scrollHeight))+'px';}},[message]);
  useEffect(()=>{const listener=(e:KeyboardEvent)=>{if(e.key==='Escape'){setPreview(null);setCreating(false);setSidebar(false);}};window.addEventListener('keydown',listener);return()=>window.removeEventListener('keydown',listener);},[]);
  async function create(){if(!form.name.trim()||saving)return;setSaving(true);setCreateError('');try{const next=await api<Project>('/projects',{name:form.name.trim(),brand:form.brand.trim(),product:form.product.trim(),approved_copy:form.copy.split('\n').map(x=>x.trim()).filter(Boolean)});await loadProjects();setCreating(false);await openProject(next.id);}catch(e){setCreateError((e as Error).message);}finally{setSaving(false);}}
- async function send(text=message){if(!text.trim()||busy||sending)return;setSending(true);setError('');stick.current=true;
+ async function send(text=message){
+  if(readonly)return;if(!text.trim()||busy||sending)return;setSending(true);setError('');stick.current=true;
   try{let current=project;if(!current){current=await api<Project>('/projects',{name:text.trim().slice(0,20)});await loadProjects();projectId.current=current.id;setProject(current);setBinding({id:current.session_id,projectId:current.id,cursor:0});window.history.replaceState(null,'','?project='+current.id);}
    if(waiting&&active){const resumed=await api<Run>('/runs/'+active.id+'/resume',{answer:text});if(projectId.current!==current.id)return;upsert(resumed);}
    else{const next=await api<Run>('/projects/'+current.id+'/runs',{message:text,target_asset_id:reference,reasoning_effort:reasoningEffort});if(projectId.current!==current.id)return;upsert(next,[]);setActiveId(next.id);}setMessage('');input.current?.focus();
@@ -95,7 +100,7 @@ export function Workspace(){
  return <div className="app-shell">
   <ProjectSidebar projects={projects} currentId={project?.id} open={sidebar} onClose={()=>setSidebar(false)} onCreate={()=>{setForm({name:'',brand:'',product:'',copy:''});setCreateError('');setCreating(true);}} onOpen={id=>void openProject(id)} onDelete={project=>{setDeleteTarget(project);setDeleteError('');}}/>
   <main className="main-workspace">
-   <header className="workspace-header"><button className="icon-button sidebar-toggle" aria-label="打开项目列表" onClick={()=>setSidebar(true)}><Icon name="sidebar"/></button><div className="project-title">{project?.name||'新图像项目'}<span>图像工作区</span></div><span className="header-status"><i className={busy?'pulse':''}/>{busy?'Agent 正在创作':waiting?'等待你的回答':'图像生成与编辑'}</span></header>
+   <header className="workspace-header"><button className="icon-button sidebar-toggle" aria-label="打开项目列表" onClick={()=>setSidebar(true)}><Icon name="sidebar"/></button><div className="project-title">{project?.name||'新图像项目'}<span>图像工作区</span></div>{project&&<button className="members-button" onClick={()=>setMembersOpen(true)}>项目成员</button>}{account}<span className="header-status"><i className={busy?'pulse':''}/>{busy?'Agent 正在创作':waiting?'等待你的回答':'图像生成与编辑'}</span></header>
    {error&&<div className="error-banner" role="alert"><span>{error}</span><button aria-label="关闭提示" onClick={()=>setError('')}><Icon name="close"/></button></div>}
    <div className={'work-area '+(empty?'is-empty':'')}>
     <div className="messages" ref={scroll} onScroll={()=>{const el=scroll.current;if(el){stick.current=el.scrollHeight-el.scrollTop-el.clientHeight<140;setShowLatest(!stick.current);}}}>
@@ -103,8 +108,8 @@ export function Workspace(){
       <div className="user-message"><Text value={c.run.message}/></div>
       <div className="assistant-message"><div className="assistant-avatar"><Icon name="image"/></div><div className="assistant-body">
        <AgentTrace conversation={c}/>
-       {c.events.filter(e=>e.kind==='question'||e.kind==='user_answer').map(e=>e.kind==='question'?<div className="question" key={e.id}><Text value={e.data.question}/>{c.run.status==='waiting_user'&&<div className="question-options">{(e.data.options||[]).map((option:string)=><button key={option} disabled={sending} onClick={()=>void send(option)}>{option}</button>)}</div>}</div>:<div className="reply-message" key={e.id}><span>你的补充</span><Text value={e.data.text}/></div>)}
-       {imagesFor(c).length>0&&<div className="image-gallery">{imagesFor(c).map(asset=><figure className="image-card" key={asset.id}><button className="image-open" aria-label={'查看图片：'+asset.title} onClick={()=>setPreview(asset)}><img src={asset.url} alt={asset.title} loading="lazy"/></button><figcaption><div><strong>{asset.title||'生成图片'}</strong><span>{asset.width} × {asset.height}</span></div><div className="image-actions"><button title="基于此图修改" aria-label={'基于此图修改：'+asset.title} className={reference===asset.id?'is-reference':''} onClick={()=>useImage(asset)}><Icon name="image"/></button><a aria-label={'下载图片：'+asset.title} title="下载图片" href={asset.url+'?download=true'} download><Icon name="download"/></a></div></figcaption></figure>)}</div>}
+       {c.events.filter(e=>e.kind==='question'||e.kind==='user_answer').map(e=>e.kind==='question'?<div className="question" key={e.id}><Text value={e.data.question}/>{c.run.status==='waiting_user'&&<div className="question-options">{(e.data.options||[]).map((option:string)=><button key={option} disabled={sending||readonly} onClick={()=>void send(option)}>{option}</button>)}</div>}</div>:<div className="reply-message" key={e.id}><span>你的补充</span><Text value={e.data.text}/></div>)}
+       {imagesFor(c).length>0&&<div className="image-gallery">{imagesFor(c).map(asset=><figure className="image-card" key={asset.id}><button className="image-open" aria-label={'查看图片：'+asset.title} onClick={()=>setPreview(asset)}><img src={asset.url} alt={asset.title} loading="lazy"/></button><figcaption><div><strong>{asset.title||'生成图片'}</strong><span>{asset.width} × {asset.height}</span></div><div className="image-actions"><button title="基于此图修改" aria-label={'基于此图修改：'+asset.title} className={reference===asset.id?'is-reference':''} disabled={readonly} onClick={()=>useImage(asset)}><Icon name="image"/></button><a aria-label={'下载图片：'+asset.title} title="下载图片" href={asset.url+'?download=true'} download><Icon name="download"/></a></div></figcaption></figure>)}</div>}
        {c.run.summary&&<Text value={c.run.summary}/>} {c.run.error&&<p className="run-error">{c.run.error}</p>}
        {!['queued','running','waiting_user','succeeded'].includes(c.run.status)&&<span className="run-state">{states[c.run.status]}</span>}
       </div></div>
@@ -113,18 +118,19 @@ export function Workspace(){
     </div>
     <div className="composer-shell">
      {showLatest&&!empty&&<button className="jump-to-latest" onClick={()=>{stick.current=true;setShowLatest(false);bottom.current?.scrollIntoView({behavior:'smooth',block:'end'});}}><Icon name="down"/>回到底部</button>}
-     {waiting&&<div className="waiting-notice"><span>补充回答后，Agent 会继续这个任务。</span><button onClick={()=>void cancel()}>结束此任务</button></div>}
+     {waiting&&<div className="waiting-notice"><span>补充回答后，Agent 会继续这个任务。</span><button disabled={readonly} onClick={()=>void cancel()}>结束此任务</button></div>}
      <form className="composer" onSubmit={e=>{e.preventDefault();void send();}}>
       {refAsset&&<div className="reference-chip"><img src={refAsset.url} alt="当前参考图"/><span title={refAsset.title}>参考：{refAsset.title||'当前图片'}</span><button type="button" aria-label="移除参考图" title="移除参考图，开始新的创作" onClick={()=>setReference('')}><Icon name="close"/></button></div>}
-      <textarea ref={input} aria-label="图像需求或修改意见" placeholder={waiting?'输入你的回答…':refAsset?'描述你希望修改的地方…':'描述想生成的图片，例如：一个国潮饭盒的产品效果图…'} value={message} disabled={busy||sending||loading} onChange={e=>setMessage(e.target.value)} onKeyDown={e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.nativeEvent.isComposing){e.preventDefault();void send();}}}/>
-      <div className="composer-bottom"><div className="composer-controls"><span className="model-label"><span className="online-dot"/>DeepSeek · Seedream</span><ReasoningSelector value={(busy||waiting)?active?.reasoning_effort||'max':reasoningEffort} onChange={setReasoningEffort} disabled={busy||waiting||sending||loading}/></div><button type="submit" className="send-button" aria-label="发送需求" disabled={!message.trim()||busy||sending||loading}>{busy?<span className="trace-spinner"/>:<Icon name="send"/>}</button></div>
-     </form><p className="composer-hint">Enter 发送 · Shift + Enter 换行</p>
+      <textarea ref={input} aria-label="图像需求或修改意见" placeholder={waiting?'输入你的回答…':refAsset?'描述你希望修改的地方…':'描述想生成的图片，例如：一个国潮饭盒的产品效果图…'} value={message} disabled={readonly||busy||sending||loading} onChange={e=>setMessage(e.target.value)} onKeyDown={e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.nativeEvent.isComposing){e.preventDefault();void send();}}}/>
+      <div className="composer-bottom"><div className="composer-controls"><span className="model-label"><span className="online-dot"/>DeepSeek · Seedream</span><ReasoningSelector value={(busy||waiting)?active?.reasoning_effort||'max':reasoningEffort} onChange={setReasoningEffort} disabled={readonly||busy||waiting||sending||loading}/></div><button type="submit" className="send-button" aria-label="发送需求" disabled={readonly||!message.trim()||busy||sending||loading}>{busy?<span className="trace-spinner"/>:<Icon name="send"/>}</button></div>
+     </form><p className="composer-hint">{readonly?'你拥有查看权限，可浏览和下载项目图片':'Enter 发送 · Shift + Enter 换行'}</p>
     </div>
    </div>
   </main>
+  {membersOpen&&project&&<ProjectMembers project={project} onClose={()=>setMembersOpen(false)} onChanged={()=>{void refresh(project.id);void loadProjects();}}/>}
   {creating&&<Dialog titleId="create-title" busy={saving} onClose={()=>setCreating(false)}><form className="project-modal" onSubmit={e=>{e.preventDefault();void create();}}><div className="modal-heading"><h2 id="create-title">新建项目</h2><button type="button" className="icon-button" aria-label="关闭新建项目" disabled={saving} onClick={()=>setCreating(false)}><Icon name="close"/></button></div><p>给这次创作起个名字，细节可以在对话里告诉 Agent。</p><label>项目名称<input required maxLength={120} placeholder="例如：国潮饭盒" value={form.name} onChange={e=>setForm({...form,name:e.target.value})}/></label>{createError&&<p className="dialog-error" role="alert">{createError}</p>}<details className="optional-brief"><summary>补充产品信息（选填）</summary><label>品牌<input value={form.brand} onChange={e=>setForm({...form,brand:e.target.value})}/></label><label>产品<input value={form.product} onChange={e=>setForm({...form,product:e.target.value})}/></label><label>画面文字，每行一项<textarea value={form.copy} onChange={e=>setForm({...form,copy:e.target.value})}/></label></details><div className="modal-footer"><button type="button" className="secondary-button" disabled={saving} onClick={()=>setCreating(false)}>取消</button><button className="primary-button" disabled={saving||!form.name.trim()}>{saving?'创建中…':'创建项目'}</button></div></form></Dialog>}
   {deleteTarget&&<DeleteProjectDialog project={deleteTarget} busy={deleting} error={deleteError} blocked={deleteTarget.id===project?.id&&!!active&&['queued','running','waiting_user'].includes(active.status)} onClose={()=>{if(!deleting)setDeleteTarget(null);}} onDelete={()=>void deleteProject()}/>}
   {toast&&<div className="toast" role="status"><span className="online-dot"/><span>{toast}</span><button className="icon-button" aria-label="关闭通知" onClick={()=>setToast('')}><Icon name="close"/></button></div>}
-  {preview&&<div className="image-lightbox" role="dialog" aria-modal="true" aria-label="图片预览" onMouseDown={e=>{if(e.target===e.currentTarget)setPreview(null);}}><button className="lightbox-close" aria-label="关闭图片预览" onClick={()=>setPreview(null)}><Icon name="close"/></button><img src={preview.url} alt={preview.title}/><div className="lightbox-actions"><button onClick={()=>useImage(preview)}>基于此图修改</button><a href={preview.url+'?download=true'} download>下载图片</a></div></div>}
+  {preview&&<div className="image-lightbox" role="dialog" aria-modal="true" aria-label="图片预览" onMouseDown={e=>{if(e.target===e.currentTarget)setPreview(null);}}><button className="lightbox-close" aria-label="关闭图片预览" onClick={()=>setPreview(null)}><Icon name="close"/></button><img src={preview.url} alt={preview.title}/><div className="lightbox-actions"><button disabled={readonly} onClick={()=>useImage(preview)}>基于此图修改</button><a href={preview.url+'?download=true'} download>下载图片</a></div></div>}
  </div>;
 }

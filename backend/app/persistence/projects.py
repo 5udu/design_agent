@@ -93,6 +93,7 @@ def delete_project(store, project_id):
             for table in ('sessions', 'assets', 'versions', 'runs'):
                 db.execute(f'DELETE FROM {table} WHERE project_id=?', (project_id,))
             db.execute('DELETE FROM projects WHERE id=?', (project_id,))
+            db.execute('DELETE FROM project_members WHERE project_id=?', (project_id,))
             db.executemany('INSERT INTO file_cleanup(path) VALUES(?) ON CONFLICT(path) DO NOTHING', [(path,) for path in paths])
         # Checkpoint transactions finish before taking the preview lock: an
         # async worker may still be committing another project's checkpoint.

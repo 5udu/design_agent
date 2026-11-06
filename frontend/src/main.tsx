@@ -1,5 +1,5 @@
 import React from 'react';
 import {createRoot} from 'react-dom/client';
-import {Workspace} from './features/workspace/Workspace';
+import {AuthApp} from './features/auth/AuthApp';
 import './styles.css';
-createRoot(document.getElementById('root')!).render(<React.StrictMode><Workspace/></React.StrictMode>);
+createRoot(document.getElementById('root')!).render(<React.StrictMode><AuthApp/></React.StrictMode>);

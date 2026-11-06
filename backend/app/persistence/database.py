@@ -3,6 +3,19 @@ import hashlib
 from contextlib import contextmanager
 
 
+class SQLiteConnection:
+    def __init__(self, connection):
+        self.connection = connection
+
+    def __getattr__(self, name):
+        return getattr(self.connection, name)
+
+    def execute(self, sql, args=()):
+        if sql == 'BEGIN IMMEDIATE' and self.connection.in_transaction:
+            return self.connection.execute('SELECT 1')
+        return self.connection.execute(sql, args)
+
+
 class Row(dict):
     def __getitem__(self, key):
         return list(self.values())[key] if isinstance(key, int) else super().__getitem__(key)

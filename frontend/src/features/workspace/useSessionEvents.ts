@@ -14,6 +14,7 @@ export function useSessionEvents(binding:Binding|null,handlers:{event:(event:Age
    if(disposed)return;
    disposed=true;stream.close();callbacks.current.deleted(binding.projectId);
   });
+  stream.addEventListener('access_revoked',()=>{stream.close();if(!disposed){disposed=true;callbacks.current.deleted(binding.projectId);callbacks.current.error('项目访问权限已变更，请重新登录或选择其他项目');}});
   stream.onmessage=message=>{
    if(disposed)return;
    const event:AgentEvent=JSON.parse(message.data);

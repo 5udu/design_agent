@@ -1,7 +1,7 @@
 import json
 import sqlite3
 import pytest
-from fastapi.testclient import TestClient
+from auth_helpers import signed_in_client
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from app.agent.graph import build_graph
 from app.agent.instructions import SYSTEM
@@ -188,7 +188,7 @@ def test_session_cursor_snapshot_and_private_payload_api(tmp_path,monkeypatch):
     monkeypatch.setattr(server,'store',store)
     monkeypatch.setattr(server,'assets',gateway.assets)
     monkeypatch.setattr(server,'settings',config)
-    with TestClient(server.app) as client:
+    with signed_in_client(server) as client:
         snapshot=client.get('/api/sessions/'+run['session_id']).json()
         store.append(run['id'],'test',{'value':1})
         delta=client.get('/api/sessions/'+run['session_id'],params={'after':snapshot['cursor']}).json()

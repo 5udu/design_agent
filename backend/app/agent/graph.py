@@ -6,6 +6,7 @@ from app.context.builder import ContextBuilder
 from app.providers.deepseek import ContextWindowExceeded
 from app.runtime.results import finish_run
 from app.tools.registry import TOOL_SCHEMAS
+from app.auth import require_run_access
 
 
 class AgentState(TypedDict, total=False):
@@ -20,6 +21,7 @@ def build_graph(store, model, gateway, config, checkpointer):
 
     async def decide(state):
         run = store.get('runs', state['run_id'])
+        require_run_access(store, run)
         if run['status'] == 'cancelled':
             return {'finished': True, 'calls': []}
         steps = state.get('steps', run.get('steps', 0))

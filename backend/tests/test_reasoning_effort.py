@@ -1,5 +1,5 @@
 import pytest
-from fastapi.testclient import TestClient
+from auth_helpers import signed_in_client
 from app.config import Settings
 from app.persistence.assets import Assets
 from app.persistence.repositories import Store
@@ -14,7 +14,7 @@ def client(tmp_path,monkeypatch):
     monkeypatch.setattr(server,'settings',config)
     monkeypatch.setattr(server,'store',store)
     monkeypatch.setattr(server,'assets',Assets(store,config))
-    with TestClient(server.app) as api:
+    with signed_in_client(server) as api:
         yield api,store,config
 
 
